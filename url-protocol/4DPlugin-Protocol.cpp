@@ -48,6 +48,22 @@ namespace customurl
 
 #pragma mark -
 
+static bool IsRunningInSession0()
+{
+#if VERSIONWIN
+    DWORD sessionId = 0;
+    if (!ProcessIdToSessionId(GetCurrentProcessId(), &sessionId))
+    {
+        std::cerr << "ProcessIdToSessionId failed. Error: " << GetLastError() << std::endl;
+        return false;
+    }
+
+    return sessionId == 0;
+#else
+    return false;
+#endif
+}
+
 #define MAX_PROCESS_NAME 256
 
 bool IsProcessOnExit()
@@ -145,7 +161,9 @@ void PluginMain(PA_long32 selector, PA_PluginParameters params) {
         {
             case kInitPlugin :
             case kServerInitPlugin :
-                OnStartup();
+                if(!IsRunningInSession0()){
+                    OnStartup();
+                }
                 break;
                 
 #if VERSIONMAC
@@ -157,20 +175,21 @@ void PluginMain(PA_long32 selector, PA_PluginParameters params) {
 #if VERSIONWIN
             case kDeinitPlugin :
             case kServerDeinitPlugin :
-                if(customurl::hwnd) {
-                    CloseWindow(customurl::hwnd);
+                if(!IsRunningInSession0()){
+                    if(customurl::hwnd) {
+                        CloseWindow(customurl::hwnd);
+                    }
                 }
                 break;
 #endif
-
 			// --- Protocol
             
 			case 1 :
-				REGISTER_PROTOCOL(params);
+                if(!IsRunningInSession0()){
+                    REGISTER_PROTOCOL(params);
+                }
 				break;
-
         }
-
 	}
 	catch(...)
 	{
