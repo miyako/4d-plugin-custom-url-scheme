@@ -3,3 +3,6 @@ url-protocol/.vs/*
 url-protocol/Objs/*
 url-protocol/test/Plugins/Protocol.bundle/Contents/Windows64/Protocol.exp
 url-protocol/test/Plugins/Protocol.bundle/Contents/Windows64/Protocol.lib
+test/userPreferences.*
+test/Project/DerivedData/*
+build/*
