@@ -217,11 +217,19 @@ static void registerApp(std::wstring& scheme) {
     wchar_t    fDrive[_MAX_DRIVE], fDir[_MAX_DIR], fName[_MAX_FNAME], fExt[_MAX_EXT];
     
     HMODULE hplugin = GetModuleHandleW(L"Protocol.4DX");
-    GetModuleFileNameW(hplugin, thisPath, _MAX_PATH);
+    if(!hplugin)
+        return;
+    
+    if(!GetModuleFileNameW(hplugin, thisPath, _MAX_PATH))
+        return;
+    
     _wsplitpath_s(thisPath, fDrive, fDir, fName, fExt);
     
     std::wstring path = fDrive;
     path += fDir;//path to plugin parent folder
+    
+    if(path.empty())
+        return;
     
     if(path.at(path.size() - 1) != L'\\')//remove delimiter
         path += L'\\';
@@ -322,7 +330,6 @@ static void registerApp(std::wstring& scheme) {
             RegCloseKey(hkcu);
         }
     
-        auto func = [](UINT timeout) {
         /*
 		SendMessageTimeout(
 				HWND_BROADCAST,
@@ -330,18 +337,19 @@ static void registerApp(std::wstring& scheme) {
 				0,
 				(LPARAM)L"WarnOnOpen",
 				SMTO_ABORTIFHUNG,
-				timeout,
+				1000,
 				NULL);
 		*/
-			PostMessage(
-				HWND_BROADCAST,
-				WM_SETTINGCHANGE,
-				0,
-				(LPARAM)L"WarnOnOpen");
-			
-        };
-        
-        std::async(std::launch::async, func, 1000);
+        /* PostMessage queues and returns immediately (unlike SendMessageTimeout,
+           which the comment above shows was deliberately avoided); it does not
+           need to be wrapped in std::async. A discarded std::async(launch::async, ...)
+           future blocks in its destructor until the task finishes, which would
+           silently turn this back into a blocking call. */
+		PostMessage(
+			HWND_BROADCAST,
+			WM_SETTINGCHANGE,
+			0,
+			(LPARAM)L"WarnOnOpen");
 
     }
 }
@@ -351,9 +359,11 @@ static void registerApp(std::wstring& scheme) {
 
 void REGISTER_PROTOCOL(PA_PluginParameters params) {
 
-    PA_Unistring arg0 = PA_GetApplicationFullPath();
     PA_Unistring *arg1 = PA_GetStringParameter(params, 1);
     PA_Unistring *arg2 = PA_GetStringParameter(params, 2);
+    
+    if(!arg1 || !arg2)
+        return;
         
     if(1)
     {
@@ -476,7 +486,15 @@ void listenerLoop()
         
         if(1)
         {
+            std::lock_guard<std::mutex> lock(globalMutex4);
+            
             PROCESS_SHOULD_RESUME = customurl::PROCESS_SHOULD_RESUME;
+        }
+        
+        if(1)
+        {
+            std::lock_guard<std::mutex> lock(globalMutex3);
+            
             PROCESS_SHOULD_TERMINATE = customurl::PROCESS_SHOULD_TERMINATE;
         }
         
@@ -515,6 +533,12 @@ void listenerLoop()
                     std::lock_guard<std::mutex> lock(globalMutex);
                     
                     URLs = customurl::CUSTOM_URL.size();
+                }
+                
+                if(1)
+                {
+                    std::lock_guard<std::mutex> lock(globalMutex3);
+                    
                     PROCESS_SHOULD_TERMINATE = customurl::PROCESS_SHOULD_TERMINATE;
                 }
             }
@@ -533,6 +557,8 @@ void listenerLoop()
         
         if(1)
         {
+            std::lock_guard<std::mutex> lock(globalMutex3);
+            
             PROCESS_SHOULD_TERMINATE = customurl::PROCESS_SHOULD_TERMINATE;
         }
         
@@ -568,10 +594,10 @@ void listenerLoop()
 
 void listenerLoopStart()
 {
+    std::lock_guard<std::mutex> lock(globalMutex1);
+    
     if(!customurl::METHOD_PROCESS_ID)
     {
-        std::lock_guard<std::mutex> lock(globalMutex1);
-        
         customurl::METHOD_PROCESS_ID = PA_NewProcess((void *)listenerLoop,
                                                      customurl::MONITOR_PROCESS_STACK_SIZE,
                                                      customurl::MONITOR_PROCESS_NAME);
@@ -580,7 +606,15 @@ void listenerLoopStart()
 
 void listenerLoopFinish()
 {
-    if(customurl::METHOD_PROCESS_ID)
+    process_number_t methodProcessId;
+    if(1)
+    {
+        std::lock_guard<std::mutex> lock(globalMutex1);
+        
+        methodProcessId = customurl::METHOD_PROCESS_ID;
+    }
+    
+    if(methodProcessId)
     {
         if(1)
         {
@@ -626,6 +660,13 @@ void listenerLoopExecuteMethod()
     {
         std::lock_guard<std::mutex> lock(globalMutex);
         
+        /* guard against an empty queue: currently CALLBACK_IN_NEW_PROCESS is 0
+           so this function only ever runs after the caller confirmed URLs > 0
+           on the same single consumer, but this makes the function safe on its
+           own if that macro is ever flipped to 1 (concurrent consumers). */
+        if(customurl::CUSTOM_URL.empty())
+            return;
+        
         std::vector<CUTF16String>::iterator it;
         
         it = customurl::CUSTOM_URL.begin();
@@ -635,7 +676,19 @@ void listenerLoopExecuteMethod()
         customurl::CUSTOM_URL.erase(it);
     }
     
-    method_id_t methodId = PA_GetMethodID((PA_Unichar *)customurl::LISTENER_METHOD.c_str());
+    /* LISTENER_METHOD is written under globalMutex2 in REGISTER_PROTOCOL (which can
+       run in a different process concurrently with this listener process), so it
+       must also be read under globalMutex2 here -- copy into a local under the lock
+       rather than reading the shared std::wstring directly. */
+    CUTF16String listenerMethod;
+    if(1)
+    {
+        std::lock_guard<std::mutex> lock(globalMutex2);
+        
+        listenerMethod = customurl::LISTENER_METHOD;
+    }
+    
+    method_id_t methodId = PA_GetMethodID((PA_Unichar *)listenerMethod.c_str());
     
     if(methodId)
     {
@@ -649,13 +702,13 @@ void listenerLoopExecuteMethod()
         
         PA_ClearVariable(&params[0]);
 
-    }else if(customurl::LISTENER_METHOD.length() != 0)
+    }else if(listenerMethod.length() != 0)
     {
         PA_Variable    params[2];
         params[0] = PA_CreateVariable(eVK_Unistring);
         params[1] = PA_CreateVariable(eVK_Unistring);
         
-        PA_Unistring method = PA_CreateUnistring((PA_Unichar *)customurl::LISTENER_METHOD.c_str());
+        PA_Unistring method = PA_CreateUnistring((PA_Unichar *)listenerMethod.c_str());
         PA_SetStringVariable(&params[0], &method);
                 
         PA_Unistring arg1 = PA_CreateUnistring((PA_Unichar *)URL.c_str());
@@ -756,11 +809,30 @@ LRESULT CALLBACK Callback(
 				unsigned char *p = (unsigned char *)bufIn;
 				try
 				{
-					std::vector<unsigned char>buf(wparam);
-					CopyMemory(&buf[0], p, wparam);
-					CUTF16String URL = (PA_Unichar *)&buf[0];
-					customurl::CUSTOM_URL.push_back(URL);
-					listenerLoopExecute();
+					/* wparam comes from an external process's window message and is not
+					   trusted: reject 0 and sizes that aren't a whole number of PA_Unichar
+					   units before doing anything with it. */
+					if (wparam != 0 && (wparam % sizeof(PA_Unichar)) == 0)
+					{
+						std::vector<unsigned char>buf(wparam);
+						CopyMemory(&buf[0], p, wparam);
+
+						/* Use the explicit-length constructor (as the macOS Callback and
+						   generateUuid() already do) instead of the null-terminated one:
+						   the external payload is not guaranteed to contain a UTF-16 NUL
+						   within these wparam bytes, so scanning for one can read past
+						   the end of buf. */
+						CUTF16String URL((const PA_Unichar *)&buf[0], wparam / sizeof(PA_Unichar));
+
+						if(1)
+						{
+							std::lock_guard<std::mutex> lock(globalMutex);
+
+							customurl::CUSTOM_URL.push_back(URL);
+						}
+
+						listenerLoopExecute();
+					}
 				}
 				catch (...)
 				{
