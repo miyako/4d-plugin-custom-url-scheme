@@ -77,6 +77,11 @@ jobs:
         run: |
           msbuild "%PRODUCT_NAME%.sln" /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 /p:WindowsTargetPlatformVersion=10.0 /m
 
+      - name: build url-redirect helper (x64)
+        shell: cmd
+        run: |
+          msbuild "url-redirect-windows\url-redirect.sln" /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 /p:WindowsTargetPlatformVersion=10.0 /m
+
       - name: normalize windows output to canonical case
         shell: pwsh
         run: |
@@ -106,13 +111,27 @@ jobs:
           } else {
             Copy-Item $found.FullName $destination -Force
           }
+
+          # url-redirect.exe, built from url-redirect-windows\url-redirect.sln
+          # (default MSBuild OutDir: url-redirect-windows\x64\Release\url-redirect.exe)
+          $foundRedirect = Get-ChildItem -Recurse -Filter "url-redirect.exe" -ErrorAction SilentlyContinue | Where-Object { $_.FullName -like "*url-redirect-windows*" } | Select-Object -First 1
+          if (-not $foundRedirect) {
+            Get-ChildItem -Recurse -Filter "url-redirect.exe" | ForEach-Object { Write-Host $_.FullName }
+            Write-Error "url-redirect.exe not found after build"
+            exit 1
+          }
+          Write-Host "Found at: $($foundRedirect.FullName)"
+          Copy-Item $foundRedirect.FullName (Join-Path $canonicalDir "url-redirect.exe") -Force
+
           Get-ChildItem $canonicalDir
 
       - name: upload windows binaries
         uses: actions/upload-artifact@v4
         with:
           name: windows-binaries
-          path: ${{ env.BASE_DIR }}/Plugins/${{ env.PRODUCT_NAME }}.bundle/Contents/Windows64/${{ env.PRODUCT_NAME }}.4DX
+          path: |
+            ${{ env.BASE_DIR }}/Plugins/${{ env.PRODUCT_NAME }}.bundle/Contents/Windows64/${{ env.PRODUCT_NAME }}.4DX
+            ${{ env.BASE_DIR }}/Plugins/${{ env.PRODUCT_NAME }}.bundle/Contents/Windows64/url-redirect.exe
           if-no-files-found: error
 
   build-macos:
@@ -212,6 +231,54 @@ jobs:
           lipo -info "$BIN" | grep -q "arm64"
           lipo -info "$BIN" | grep -q "x86_64"
 
+      - name: build macOS url-redirect helper (universal)
+        run: |
+          set -euo pipefail
+          PRODUCT="${{ env.PRODUCT_NAME }}"
+          BASE="${{ env.BASE_DIR }}"
+          HELPER_DEST="$PWD/${BASE}/Plugins/${PRODUCT}.bundle/Contents/MacOS"
+
+          # Built in Debug configuration on purpose: this project's Release
+          # configuration carries its own legacy Run Script build phase that
+          # codesigns, packages and notarizes url-redirect.app standalone,
+          # using a local "notarytool" keychain profile that doesn't exist on
+          # this runner (ours is called "notarytool-profile") - it would fail
+          # the build. Debug uses identical build settings otherwise (same
+          # bundle id, same deployment target) and skips that phase. Signing
+          # and notarization for this helper happen below as part of the
+          # parent Protocol.bundle: `codesign --deep` on the outer bundle
+          # signs the nested url-redirect.app too.
+          echo "Building url-redirect.xcodeproj target url-redirect"
+          xcodebuild -project url-redirect-macos/url-redirect.xcodeproj \
+            -target url-redirect \
+            -configuration Debug \
+            ARCHS="arm64 x86_64" \
+            ONLY_ACTIVE_ARCH=NO \
+            MACOSX_DEPLOYMENT_TARGET="${{ env.MACOS_DEPLOYMENT_TARGET }}" \
+            CODE_SIGNING_ALLOWED=NO \
+            CONFIGURATION_BUILD_DIR="$HELPER_DEST" \
+            build
+
+          echo "Built:"
+          ls -R "$HELPER_DEST"
+
+      - name: verify url-redirect helper binary
+        run: |
+          set -euo pipefail
+          PRODUCT="${{ env.PRODUCT_NAME }}"
+          BASE="${{ env.BASE_DIR }}"
+          BIN="${BASE}/Plugins/${PRODUCT}.bundle/Contents/MacOS/url-redirect.app/Contents/MacOS/url-redirect"
+
+          if [ ! -f "$BIN" ]; then
+            echo "::error::Expected binary not found at $BIN"
+            ls -R "${BASE}/Plugins/${PRODUCT}.bundle/Contents/MacOS"
+            exit 1
+          fi
+
+          lipo -info "$BIN"
+          lipo -info "$BIN" | grep -q "arm64"
+          lipo -info "$BIN" | grep -q "x86_64"
+
       - name: merge Windows binaries into the bundle
         run: |
           set -euo pipefail
@@ -232,6 +299,15 @@ jobs:
 
           echo "Copying $SRC -> $BUNDLE/Contents/Windows64/${PRODUCT}.4DX"
           cp "$SRC" "$BUNDLE/Contents/Windows64/${PRODUCT}.4DX"
+
+          SRC_REDIRECT=$(find winbuild -name "url-redirect.exe" -type f | head -1)
+          if [ -z "$SRC_REDIRECT" ]; then
+            echo "::error::url-redirect.exe not found in winbuild/"
+            exit 1
+          fi
+
+          echo "Copying $SRC_REDIRECT -> $BUNDLE/Contents/Windows64/url-redirect.exe"
+          cp "$SRC_REDIRECT" "$BUNDLE/Contents/Windows64/url-redirect.exe"
 
           echo "BUNDLE_PATH=$BUNDLE" >> "$GITHUB_ENV"
           ls -R "$BUNDLE/Contents"
