@@ -692,21 +692,29 @@ void listenerLoopExecuteMethod()
     
     if(methodId)
     {
+        /* PA_SetStringVariable is a shallow assignment: start from undefined, not an empty text owner */
         PA_Variable    params[1];
-        params[0] = PA_CreateVariable(eVK_Unistring);
+        params[0] = PA_CreateVariable(eVK_Undefined);
         
         PA_Unistring arg1 = PA_CreateUnistring((PA_Unichar *)URL.c_str());
         PA_SetStringVariable(&params[0], &arg1);
                 
-        PA_ExecuteMethodByID(methodId, params, 1);
+        PA_Variable returned = PA_ExecuteMethodByID(methodId, params, 1);
+        PA_ErrorCode error = PA_GetLastError();
         
         PA_ClearVariable(&params[0]);
+        
+        /* the method result is owned by the caller; it is unspecified on failure */
+        if(error == eER_NoErr)
+        {
+            PA_ClearVariable(&returned);
+        }
 
     }else if(listenerMethod.length() != 0)
     {
         PA_Variable    params[2];
-        params[0] = PA_CreateVariable(eVK_Unistring);
-        params[1] = PA_CreateVariable(eVK_Unistring);
+        params[0] = PA_CreateVariable(eVK_Undefined);
+        params[1] = PA_CreateVariable(eVK_Undefined);
         
         PA_Unistring method = PA_CreateUnistring((PA_Unichar *)listenerMethod.c_str());
         PA_SetStringVariable(&params[0], &method);
@@ -714,10 +722,16 @@ void listenerLoopExecuteMethod()
         PA_Unistring arg1 = PA_CreateUnistring((PA_Unichar *)URL.c_str());
         PA_SetStringVariable(&params[1], &arg1);
 
-        PA_ExecuteCommandByID(1007 /* execute method */, params, 2);
+        PA_Variable returned = PA_ExecuteCommandByID(1007 /* execute method */, params, 2);
+        PA_ErrorCode error = PA_GetLastError();
         
         PA_ClearVariable(&params[0]);
         PA_ClearVariable(&params[1]);
+        
+        if(error == eER_NoErr)
+        {
+            PA_ClearVariable(&returned);
+        }
     }
 }
 
