@@ -1,0 +1,30 @@
+name: Ownership
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "4DPlugin-Protocol.*"
+      - "4D Plugin API/**"
+      - ".github/tests/**"
+      - ".github/workflows/ownership.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "4DPlugin-Protocol.*"
+      - "4D Plugin API/**"
+      - ".github/tests/**"
+      - ".github/workflows/ownership.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  ownership:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Ownership regressions (ASan/UBSan, synthetic boundaries)
+        run: python3 .github/tests/test_ownership.py -v
